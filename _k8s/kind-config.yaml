@@ -1,3 +1,4 @@
+# kind k8s cluster 생성
 kind: Cluster                         # kind: Cluster 이 yaml이 정의하고자 하는 리소스가 k8s 클러스터라는 뜻
 apiVersion: kind.x-k8s.io/v1alpha4    # apiVersion: kind.x-k8s.io/v1alpha4 Kind의 설정 버전
 nodes:                                # kind 클러스터를 구성할 노드들의 목록

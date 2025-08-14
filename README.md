@@ -1,6 +1,6 @@
 로컬 머신에 k8s 클러스터를 생성, ES와 Kibana를 띄우는 연습
 
-1. 로컬 테스트용 k8s 클러스터 생성하기
+**1. 로컬 테스트용 k8s 클러스터 생성하기**
 - method: kind
 ```Bash
 # kind 설치
@@ -26,13 +26,36 @@ You can now use your cluster with:
 
 kubectl cluster-info --context kind-local-k8s
 
+# kind로 클러스터 삭제 시
+kind delete cluster --name local-k8s
+
 # 생성된 클러스터 정보 확인
 kubectl cluster-info
 Kubernetes control plane is running at https://127.0.0.1:58716
 CoreDNS is running at https://127.0.0.1:58716/api/v1/namespaces/kube-system/services/kube-dns:dns/proxy
 ```
 
-2. ECK(Elastic Cloud on Kubernetes) 오퍼레이터 설치
+**2. 인그레스 설치**
+```Bash
+# 추후 도메인 생성하여 포트포워딩 없이 클러스터에 설치된 es/kibana에 접근하기 위한 ingress controller 설치
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.1/deploy/static/provider/kind/deploy.yaml
+kubectl wait --namespace ingress-nginx \
+  --for=condition=Available deploy/ingress-nginx-controller \
+  --timeout=120s
+#
+## 도커 host ip 확인
+#docker ps
+#CONTAINER ID   IMAGE                  COMMAND                  CREATED       STATUS       PORTS                                                                 NAMES
+#3c92a5255abb   kindest/node:v1.33.1   "/usr/local/bin/entr…"   2 hours ago   Up 2 hours   0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp, 127.0.0.1:59322->6443/tcp   local-k8s-control-plane
+#36d39a9229ac   kindest/node:v1.33.1   "/usr/local/bin/entr…"   2 hours ago   Up 2 hours                                                                         local-k8s-worker2
+#68af65888bd2   kindest/node:v1.33.1   "/usr/local/bin/entr…"   2 hours ago   Up 2 hours                                                                         local-k8s-worker
+#
+## control-plane의 ip 확인
+#docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' local-k8s-control-plane
+#172.18.0.4
+```
+
+**2. ECK(Elastic Cloud on Kubernetes) 오퍼레이터 설치**
 ```Bash
 # helm으로 클러스터에 eck 오퍼레이터 설치
 helm repo add elastic https://helm.elastic.co
@@ -41,7 +64,7 @@ helm upgrade --install eck-operator elastic/eck-operator \
   -n elastic-system --create-namespace
 ```
 
-3. yaml로 es 적용 후 테스트
+**3. yaml로 es 적용 후 테스트**
 ```Bash
 # yaml에 정의한 설정으로 설치
 kubectl apply -f ./_k8s/elastic.yaml 

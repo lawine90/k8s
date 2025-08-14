@@ -62,3 +62,46 @@ spec:
     service:
       spec:
         type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: elasticsearch
+  namespace: elastic-stack
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    - host: local-es.duckdns.org    # 개인이 받은 도메인으로 설정
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: es-cluster-es-http  # kubectl get svc -n elastic-stack 에서 확인한 es 서비스 이름 및 포트
+                port:
+                  number: 9200
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana
+  namespace: elastic-stack
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+spec:
+  rules:
+    - host: local-kibana.duckdns.org    # 개인이 받은 도메인으로 설정
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kibana-kb-http    # kubectl get svc -n elastic-stack 에서 확인한 키바나 서비스 이름 및 포트
+                port:
+                  number: 5601
