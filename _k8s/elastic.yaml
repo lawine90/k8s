@@ -1,0 +1,64 @@
+# cluster namespace 설정
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: elastic-stack
+---
+# elastic 설정
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: es-cluster
+  namespace: elastic-stack  # 위에서 설정한 namespace의 name
+spec:
+  version: 8.14.3
+  nodeSets:
+    - name: default
+      count: 1
+      config:
+        node.store.allow_mmap: false
+      podTemplate:
+        spec:
+          containers:
+            - name: elasticsearch
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "1Gi"
+                limits:
+                  cpu: "1"
+                  memory: "2Gi"
+      volumeClaimTemplates:
+        - metadata:
+            name: elasticsearch-data
+          spec:
+            accessModes: [ "ReadWriteOnce" ]
+            resources:
+              requests:
+                storage: 20Gi
+  # 인증/보안 비활성화
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: true
+#  # TLS 인증 없이도 연결 허용: ES 8.x는 항상 보안이 활성화됨
+#  auth:
+#    anonymous:
+#      username: "anonymous"
+#      roles: superuser
+#      authz: true
+---
+apiVersion: kibana.k8s.elastic.co/v1
+kind: Kibana
+metadata:
+  name: kibana
+  namespace: elastic-stack
+spec:
+  version: 8.14.3
+  count: 1
+  elasticsearchRef:
+    name: es-cluster
+  http:
+    service:
+      spec:
+        type: ClusterIP

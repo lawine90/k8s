@@ -1,0 +1,31 @@
+kind: Cluster                         # kind: Cluster 이 yaml이 정의하고자 하는 리소스가 k8s 클러스터라는 뜻
+apiVersion: kind.x-k8s.io/v1alpha4    # apiVersion: kind.x-k8s.io/v1alpha4 Kind의 설정 버전
+nodes:                                # kind 클러스터를 구성할 노드들의 목록
+  - role: control-plane               # control-plane(마스터) 노드의 설정
+    kubeadmConfigPatches:             # kubeadm의 초기 설정을 덮어쓰는 설정
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true" # 마스터 노드에 ingress-ready=ture 라는 라벨을 추가
+    extraPortMappings:                # docker 컨테이너와 로컬 머신간의 포트 맵핑 설정
+      - containerPort: 80             # 컨테이너의 80포트
+        hostPort: 80                  # 로컬 머신(호스트)의 80포트
+      - containerPort: 443            # 컨테이너의 443 포트
+        hostPort: 443                 # 로컬 머신의 443 포트
+  - role: worker
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "env=dev,region=ap-northeast"      # 개발환경 라벨
+            eviction-hard: "memory.available<100Mi,nodefs.available<1Gi,imagefs.available<1Gi"
+  - role: worker
+    kubeadmConfigPatches:
+      - |
+        kind: JoinConfiguration
+        nodeRegistration:
+        kubeletExtraArgs:
+        node-labels: "env=cbt,region=ap-northeast"      # cbt 환경 라벨
+        eviction-hard: "memory.available<200Mi,nodefs.available<1Gi,imagefs.available<1Gi"
