@@ -1,0 +1,282 @@
+# 클러스터에 네임스페이스 생성
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: airflow
+---
+
+# 메타데이터용 postgre sql 생성
+apiVersion: v1
+kind: Secret
+metadata:
+  name: airflow-postgres-secret
+  namespace: airflow
+type: Opaque
+stringData:
+  postgres-user: airflow
+  postgres-password: airflow
+  postgres-db: airflow
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-postgresql
+  namespace: airflow
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: airflow-postgresql
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-postgresql
+  namespace: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-postgresql
+  template:
+    metadata:
+      labels:
+        app: airflow-postgresql
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-postgres-secret
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-postgres-secret
+                  key: postgres-password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: airflow-postgres-secret
+                  key: postgres-db
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          emptyDir: {}
+---
+
+# 셀러리 브로커(?)용 레디스
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-redis
+  namespace: airflow
+spec:
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app: airflow-redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-redis
+  namespace: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-redis
+  template:
+    metadata:
+      labels:
+        app: airflow-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7
+          ports:
+            - containerPort: 6379
+---
+
+# DB 초기화 잡 생성
+# airflow는 초기 실행 시 airflow db init 또는 airflow db upgrade를 실행해서 메타데이터 DB에 스키마를 생성해줘야 함
+# 아래 config는 해당 init step을 의미하며 이를 해줘야 webserver, scheduler, worker에서 DB에 접속이 가능함
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-init
+  namespace: airflow
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: airflow-init
+          image: apache/airflow:2.10.2
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+          command: ["airflow", "db", "init"]
+---
+
+# 에어플로우 웹서버, 스케줄러, 워커
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airflow-config
+  namespace: airflow
+data:
+  AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+  AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgresql:5432/airflow
+  AIRFLOW__CELERY__BROKER_URL: redis://airflow-redis:6379/0
+  AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-postgresql:5432/airflow
+  AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+  AIRFLOW__WEBSERVER__WEB_SERVER_PORT: "8080"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-webserver
+  namespace: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-webserver
+  template:
+    metadata:
+      labels:
+        app: airflow-webserver
+    spec:
+      containers:
+        - name: webserver
+          image: apache/airflow:2.10.2
+          args: [ "webserver" ]
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+          ports:
+            - containerPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-scheduler
+  namespace: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-scheduler
+  template:
+    metadata:
+      labels:
+        app: airflow-scheduler
+    spec:
+      containers:
+        - name: scheduler
+          image: apache/airflow:2.10.2
+          args: ["scheduler"]
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-worker
+  namespace: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-worker
+  template:
+    metadata:
+      labels:
+        app: airflow-worker
+    spec:
+      containers:
+        - name: worker
+          image: apache/airflow:2.10.2
+          args: ["celery", "worker"]
+          envFrom:
+            - configMapRef:
+                name: airflow-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-webserver
+  namespace: airflow
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: airflow-webserver
+---
+
+# 인그레스 설정
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: airflow
+  namespace: airflow
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: local-airflow.duckdns.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: airflow-webserver
+                port:
+                  number: 8080
+---
+
+# webserver pod에 접속하여 계정 생성
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-create-admin
+  namespace: airflow
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-admin
+          image: apache/airflow:2.10.2
+          command: ["bash", "-c"]
+          args:
+            - |
+              airflow users create \
+                --username admin1 \
+                --firstname Admin \
+                --lastname User \
+                --role Admin \
+                --email admin1@example.com \
+                --password admin1
+          env:
+            - name: AIRFLOW__CORE__EXECUTOR
+              value: LocalExecutor
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              value: postgresql+psycopg2://airflow:airflow@airflow-postgresql:5432/airflow

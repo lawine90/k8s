@@ -119,3 +119,16 @@ curl -u elastic:<password> http://localhost:9200/_cluster/health\?pretty
   "active_shards_percent_as_number" : 100.0
 }
 ```
+
+**4. airflow 설치**
+```Bash
+#helm repo add apache-airflow https://airflow.apache.org
+#helm repo update
+#helm install airflow apache-airflow/airflow \
+#  --namespace airflow \
+#  --set airflow.executor=KubernetesExecutor \
+#  --set service.type=ClusterIP \
+#  --set webserver.service.type=LoadBalancer
+# yaml로 에어플로우 생성
+kubectl apply -f ./_k8s/airflow.yaml
+```
