@@ -1,0 +1,199 @@
+# ------------------------------------------------------------------
+# Word2Vec end-to-end (git clone -> train job -> deployment -> ingress)
+# - Replace https://github.com/your-org/your-repo.git with your repo URL
+# - If repo is private, create Secret with token and set GIT_AUTH env (see notes)
+# ------------------------------------------------------------------
+
+# 0) Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: w2v-test
+---
+# 1) PVC for data + model artifacts
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: w2v-pvc
+  namespace: w2v-test
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+---
+# 2) Data fetch job (git clone -> copy corpus to PVC)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: w2v-load-data
+  namespace: w2v-test
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: git-clone
+          image: python:3.10-slim
+          command:
+            - bash
+            - -ec
+            - |
+              apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+              rm -rf /var/lib/apt/lists/* && \
+              echo "Cloning repo..." && \
+              # repo: change to your repo URL (public). If private, use token method described below.
+              git clone https://github.com/lawine90/k8s.git /tmp/repo && \
+              mkdir -p /mnt/data && \
+              # adjust path inside repo if needed (assumes data/corpus.txt)
+              cp /tmp/repo/data/corpus.txt /mnt/data/corpus.txt && \
+              ls -l /mnt/data || true && echo "Data copied to PVC"
+          volumeMounts:
+            - name: model-storage
+              mountPath: /mnt/data
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: w2v-pvc
+---
+# 3) Train job (git clone -> pip install gensim -> run training script from repo)
+#    This expects the repo contains a train script at scripts/train_w2v.py or fallback to inline Python
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: w2v-train
+  namespace: w2v-test
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: train
+          image: python:3.10-slim
+          command:
+            - bash
+            - -ec
+          args:
+            - |
+              set -e
+              apt-get update && apt-get install -y --no-install-recommends git ca-certificates build-essential && \
+              rm -rf /var/lib/apt/lists/* && \
+              echo "Cloning repo..." && \
+              git clone https://github.com/lawine90/k8s.git /tmp/repo && \
+              echo "Installing Python deps..." && \
+              pip install --no-cache-dir gensim==4.4.0 || pip install --no-cache-dir gensim && \
+              # If your repo has a train script, run it. Otherwise fallback to simple inline training that reads /mnt/data/corpus.txt
+              echo "Running /tmp/repo/scripts/train_w2v.py"; \
+              python /tmp/repo/scripts/train_w2v.py --output /mnt/data/w2v.bin --corpus /mnt/data/corpus.txt; \
+          volumeMounts:
+            - name: model-storage
+              mountPath: /mnt/data
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: w2v-pvc
+---
+# 4) Deployment for predictor: at startup it git-clones the repo and runs predictor.py from repo
+#    predictor.py in repo should expose FastAPI app at 0.0.0.0:8080 and load model from /models/w2v.bin
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: w2v-predictor
+  namespace: w2v-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: w2v-predictor
+  template:
+    metadata:
+      labels:
+        app: w2v-predictor
+    spec:
+      containers:
+        - name: predictor
+          image: python:3.10-slim
+          # on start: install git & deps, clone repo, copy predictor script if needed, then run uvicorn
+          command:
+            - bash
+            - -ec
+          args:
+            - |
+              set -e
+              apt-get update && apt-get install -y --no-install-recommends git ca-certificates build-essential && \
+              rm -rf /var/lib/apt/lists/* && \
+              echo "Cloning repo for predictor..." && \
+              git clone https://github.com/lawine90/k8s.git /opt/repo && \
+              # if repo has requirements, install them
+              if [ -f /opt/repo/requirements.txt ]; then \
+                pip install --no-cache-dir -r /opt/repo/requirements.txt || true; \
+              else \
+                pip install --no-cache-dir fastapi uvicorn gensim; \
+              fi && \
+              # ensure model exists (wait up to 60s)
+              for i in 1 2 3 4 5 6; do \
+                if [ -f /models/w2v.bin ]; then echo "Model found"; break; else echo "Waiting for model... ($i)"; sleep 5; fi; \
+              done; \
+              if [ ! -f /models/w2v.bin ]; then echo "ERROR: model /models/w2v.bin not present"; exit 2; fi; \
+              # repo must contain predictor.py exposing FastAPI app called 'app'
+              echo "Starting predictor from /opt/repo/predictor.py"; \
+              uvicorn --host 0.0.0.0 --port 8080 predictor:app --reload --log-level info --app-dir /opt/repo; \
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: w2v-pvc
+---
+# 5) Service for predictor
+apiVersion: v1
+kind: Service
+metadata:
+  name: w2v-predictor
+  namespace: w2v-test
+spec:
+  selector:
+    app: w2v-predictor
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+# 6) Ingress to expose predictor on local-w2v.duckdns.org
+#    Map host local-w2v.duckdns.org to your host (e.g. /etc/hosts -> 127.0.0.1 local-w2v.duckdns.org)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: w2v-ingress
+  namespace: w2v-test
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: local-w2v.duckdns.org
+      http:
+        paths:
+          - path: /similar
+            pathType: Prefix
+            backend:
+              service:
+                name: w2v-predictor
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: w2v-predictor
+                port:
+                  number: 8080
+---
+# End of manifest
