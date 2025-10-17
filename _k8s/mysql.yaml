@@ -1,0 +1,102 @@
+# MySQL 배포용 네임스페이스
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mysql
+---
+
+# MySQL 비밀번호 및 초기 DB 정보
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+  namespace: mysql
+type: Opaque
+stringData:
+  mysql-root-password: root1
+  mysql-user: admin1
+  mysql-password: admin1
+  mysql-database: airflow_db
+  mysql-host: airflow-mysql.mysql.svc.cluster.local
+  mysql-conn-url: mysql+mysqldb://admin1:admin1@airflow-mysql.mysql.svc.cluster.local:3306/airflow_db
+---
+
+# MySQL 데이터 저장용 PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: mysql
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+---
+
+# MySQL 서버 deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-mysql
+  namespace: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-mysql
+  template:
+    metadata:
+      labels:
+        app: airflow-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: mysql-root-password
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: mysql-user
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: mysql-password
+            - name: MYSQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: mysql-database
+          volumeMounts:
+            - name: mysql-storage
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mysql-storage
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+---
+
+# service: airflow 접근 포인트
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-mysql
+  namespace: mysql
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3306
+      targetPort: 3306
+  selector:
+    app: airflow-mysql
