@@ -272,38 +272,8 @@ spec:
               
               echo "Airflow initialization completed."
 ---
-#
-## webserver pod에 접속하여 계정 생성
-#apiVersion: batch/v1
-#kind: Job
-#metadata:
-#  name: airflow-create-admin
-#  namespace: airflow
-#spec:
-#  template:
-#    spec:
-#      restartPolicy: OnFailure
-#      containers:
-#        - name: create-admin
-#          #image: apache/airflow:2.10.2
-#          image: labineseo90/airflow:2.10.5-custom
-#          command: ["bash", "-c"]
-#          args:
-#            - |
-#              airflow users create \
-#                --username admin1 \
-#                --firstname Admin \
-#                --lastname User \
-#                --role Admin \
-#                --email admin1@example.com \
-#                --password admin1
-#          env:
-#            - name: AIRFLOW__CORE__EXECUTOR
-#              value: LocalExecutor
-#            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
-#              value: postgresql+psycopg2://airflow:airflow@airflow-postgresql:5432/airflow
-#---
 
+### airflow component: webserver, scheduler, worker
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -333,28 +303,33 @@ spec:
           volumeMounts:
             - name: dags
               mountPath: /opt/airflow/dags
-      # pvc mount
+              subPath: repo/dags
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.3.0
+          env:
+            - name: GIT_SYNC_REPO
+              value: "https://github.com/lawine90/k8s.git"
+            - name: GIT_SYNC_BRANCH
+              value: "main"
+            - name: GIT_SYNC_ROOT
+              value: "/git"
+            - name: GIT_SYNC_DEST
+              value: "repo"
+            - name: GIT_SYNC_SUBPATH
+              value: "dags"
+            - name: GIT_SYNC_WAIT
+              value: "60"
+          volumeMounts:
+            - name: dags
+              mountPath: /git
       volumes:
         - name: dags
-          persistentVolumeClaim:
-            claimName: airflow-dags-pvc
-#        - name: git-sync
-#          image: k8s.gcr.io/git-sync/git-sync:v4.0.0
-#          env:
-#            - name: GIT_SYNC_REPO
-#              value: "https://github.com/my-org/airflow-dags.git"
-#            - name: GIT_SYNC_BRANCH
-#              value: "main"
-#            - name: GIT_SYNC_ROOT
-#              value: "/git"
-#            - name: GIT_SYNC_DEST
-#              value: "dags"
-#          volumeMounts:
-#            - name: dags
-#              mountPath: /git
+          emptyDir: { }
+#      # pvc mount
 #      volumes:
 #        - name: dags
-#          emptyDir: { }
+#          persistentVolumeClaim:
+#            claimName: airflow-dags-pvc
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -383,11 +358,33 @@ spec:
           volumeMounts:
             - name: dags
               mountPath: /opt/airflow/dags
-      # pvc mount
+              subPath: repo/dags
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.3.0
+          env:
+            - name: GIT_SYNC_REPO
+              value: "https://github.com/lawine90/k8s.git"
+            - name: GIT_SYNC_BRANCH
+              value: "main"
+            - name: GIT_SYNC_ROOT
+              value: "/git"
+            - name: GIT_SYNC_DEST
+              value: "repo"
+            - name: GIT_SYNC_SUBPATH
+              value: "dags"
+            - name: GIT_SYNC_WAIT
+              value: "60"
+          volumeMounts:
+            - name: dags
+              mountPath: /git
       volumes:
         - name: dags
-          persistentVolumeClaim:
-            claimName: airflow-dags-pvc
+          emptyDir: { }
+#      # pvc mount
+#      volumes:
+#        - name: dags
+#          persistentVolumeClaim:
+#            claimName: airflow-dags-pvc
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -415,10 +412,32 @@ spec:
           volumeMounts:
             - name: dags
               mountPath: /opt/airflow/dags
+              subPath: repo/dags
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.3.0
+          env:
+            - name: GIT_SYNC_REPO
+              value: "https://github.com/lawine90/k8s.git"
+            - name: GIT_SYNC_BRANCH
+              value: "main"
+            - name: GIT_SYNC_ROOT
+              value: "/git"
+            - name: GIT_SYNC_DEST
+              value: "repo"
+            - name: GIT_SYNC_SUBPATH
+              value: "dags"
+            - name: GIT_SYNC_WAIT
+              value: "60"
+          volumeMounts:
+            - name: dags
+              mountPath: /git
       volumes:
         - name: dags
-          persistentVolumeClaim:
-            claimName: airflow-dags-pvc
+          emptyDir: { }
+#      volumes:
+#        - name: dags
+#          persistentVolumeClaim:
+#            claimName: airflow-dags-pvc
 
 ---
 apiVersion: v1
