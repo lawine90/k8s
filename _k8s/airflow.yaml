@@ -273,6 +273,29 @@ spec:
               echo "Airflow initialization completed."
 ---
 
+# git-sync용 credential
+apiVersion: v1
+kind: Secret
+metadata:
+  name: git-credentials
+  namespace: airflow
+data:
+  GITSYNC_USERNAME: biBsYXdpbmU5MAo=
+  GITSYNC_PASSWORD: biBnaXRodWJfcGF0XzExQUxaWFk3UTBhREpiOFVMaFJJaXdfNlF2Q1FWN0dJWW5FcEc1RzJRZXBERFVUSzFWTTA3TENTRElQalVSbXhSTEczQ09XM0JRbTFhM240TEEK
+---
+
+# 레포의 특정 path만 클론하기 위한 config
+# 레포를 모두 클론할 필요는 없으므로 특정 path만 클론
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: git-sparse-config
+  namespace: airflow
+data:
+  sparse-checkout-paths: |
+    dags/
+---
+
 ### airflow component: webserver, scheduler, worker
 apiVersion: apps/v1
 kind: Deployment
@@ -289,6 +312,20 @@ spec:
       labels:
         app: airflow-webserver
     spec:
+      # Git-sync가 접근하는 볼륨의 권한을 65533:65533으로 강제 설정
+      initContainers:
+        - name: fix-permissions
+          image: busybox:1.36
+          command: [ "sh", "-c", "chown -R 65533:65533 /git" ]
+          securityContext:
+            # Init 컨테이너가 chown을 실행하기 위해 root 권한이 필요
+            runAsUser: 0
+          volumeMounts:
+            - name: dags
+              mountPath: /git
+      # Airflow 프로세스가 생성하는 파일의 그룹을 65533으로 설정하여 Git-sync가 삭제할 수 있도록 함
+      securityContext:
+        fsGroup: 65533
       containers:
         - name: webserver
           #image: apache/airflow:2.10.2
@@ -303,33 +340,50 @@ spec:
           volumeMounts:
             - name: dags
               mountPath: /opt/airflow/dags
-              subPath: repo/dags
+              subPath: k8s.git/dags
+              readOnly: true
         - name: git-sync
           image: registry.k8s.io/git-sync/git-sync:v4.3.0
+          args:
+            - --sparse-checkout-file=/etc/git-sparse/sparse-checkout-paths
           env:
-            - name: GIT_SYNC_REPO
+            - name: GITSYNC_REPO
               value: "https://github.com/lawine90/k8s.git"
-            - name: GIT_SYNC_BRANCH
+            - name: GITSYNC_REF
               value: "main"
-            - name: GIT_SYNC_ROOT
+            - name: GITSYNC_ROOT
               value: "/git"
-            - name: GIT_SYNC_DEST
-              value: "repo"
-            - name: GIT_SYNC_SUBPATH
-              value: "dags"
-            - name: GIT_SYNC_WAIT
-              value: "60"
+            - name: GITSYNC_DEST
+              value: ""
+            - name: GITSYNC_DEPTH
+              value: "1"
+            - name: GITSYNC_PERIOD
+              value: "300s"
+            - name: GITSYNC_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials
+                  key: GITSYNC_USERNAME
+            - name: GITSYNC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials
+                  key: GITSYNC_PASSWORD
           volumeMounts:
             - name: dags
               mountPath: /git
+            - name: git-sparse
+              mountPath: /etc/git-sparse
       volumes:
         - name: dags
-          emptyDir: { }
-#      # pvc mount
-#      volumes:
-#        - name: dags
-#          persistentVolumeClaim:
-#            claimName: airflow-dags-pvc
+          persistentVolumeClaim:
+            claimName: airflow-dags-pvc
+        - name: git-sparse
+          configMap:
+            name: git-sparse-config
+            items:
+              - key: sparse-checkout-paths
+                path: sparse-checkout-paths
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -346,6 +400,20 @@ spec:
       labels:
         app: airflow-scheduler
     spec:
+      # Git-sync가 접근하는 볼륨의 권한을 65533:65533으로 강제 설정
+      initContainers:
+        - name: fix-permissions
+          image: busybox:1.36
+          command: [ "sh", "-c", "chown -R 65533:65533 /git" ]
+          securityContext:
+            # Init 컨테이너가 chown을 실행하기 위해 root 권한이 필요
+            runAsUser: 0
+          volumeMounts:
+            - name: dags
+              mountPath: /git
+      # Airflow 프로세스가 생성하는 파일의 그룹을 65533으로 설정하여 Git-sync가 삭제할 수 있도록 함
+      securityContext:
+        fsGroup: 65533
       containers:
         - name: scheduler
           #image: apache/airflow:2.10.2
@@ -354,32 +422,53 @@ spec:
           envFrom:
             - configMapRef:
                 name: airflow-config
-          # pvc mount
           volumeMounts:
             - name: dags
               mountPath: /opt/airflow/dags
-              subPath: repo/dags
+              subPath: k8s.git/dags
+              readOnly: true
         - name: git-sync
           image: registry.k8s.io/git-sync/git-sync:v4.3.0
+          args:
+            - --sparse-checkout-file=/etc/git-sparse/sparse-checkout-paths
           env:
-            - name: GIT_SYNC_REPO
+            - name: GITSYNC_REPO
               value: "https://github.com/lawine90/k8s.git"
-            - name: GIT_SYNC_BRANCH
+            - name: GITSYNC_REF
               value: "main"
-            - name: GIT_SYNC_ROOT
+            - name: GITSYNC_ROOT
               value: "/git"
-            - name: GIT_SYNC_DEST
-              value: "repo"
-            - name: GIT_SYNC_SUBPATH
-              value: "dags"
-            - name: GIT_SYNC_WAIT
-              value: "60"
+            - name: GITSYNC_DEST
+              value: ""
+            - name: GITSYNC_DEPTH
+              value: "1"
+            - name: GITSYNC_PERIOD
+              value: "300s"
+            - name: GITSYNC_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials
+                  key: GITSYNC_USERNAME
+            - name: GITSYNC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: git-credentials
+                  key: GITSYNC_PASSWORD
           volumeMounts:
             - name: dags
               mountPath: /git
+            - name: git-sparse
+              mountPath: /etc/git-sparse
       volumes:
         - name: dags
-          emptyDir: { }
+          persistentVolumeClaim:
+            claimName: airflow-dags-pvc
+        - name: git-sparse
+          configMap:
+            name: git-sparse-config
+            items:
+              - key: sparse-checkout-paths
+                path: sparse-checkout-paths
 #      # pvc mount
 #      volumes:
 #        - name: dags
@@ -401,6 +490,8 @@ spec:
       labels:
         app: airflow-worker
     spec:
+      securityContext:
+        fsGroup: 65533
       containers:
         - name: worker
           #image: apache/airflow:2.10.2
@@ -409,36 +500,44 @@ spec:
           envFrom:
             - configMapRef:
                 name: airflow-config
+          # dag 저장용 pvc mount
           volumeMounts:
             - name: dags
               mountPath: /opt/airflow/dags
-              subPath: repo/dags
-        - name: git-sync
-          image: registry.k8s.io/git-sync/git-sync:v4.3.0
-          env:
-            - name: GIT_SYNC_REPO
-              value: "https://github.com/lawine90/k8s.git"
-            - name: GIT_SYNC_BRANCH
-              value: "main"
-            - name: GIT_SYNC_ROOT
-              value: "/git"
-            - name: GIT_SYNC_DEST
-              value: "repo"
-            - name: GIT_SYNC_SUBPATH
-              value: "dags"
-            - name: GIT_SYNC_WAIT
-              value: "60"
-          volumeMounts:
-            - name: dags
-              mountPath: /git
+              subPath: k8s.git/dags
+              readOnly: true
+#        - name: git-sync
+#          image: registry.k8s.io/git-sync/git-sync:v4.3.0
+#          env:
+#            - name: GITSYNC_REPO
+#              value: "https://github.com/lawine90/k8s.git"
+#            - name: GITSYNC_REF
+#              value: "main"
+#            - name: GITSYNC_ROOT
+#              value: "/git"
+#            - name: GITSYNC_DEST
+#              value: ""
+#            - name: GITSYNC_DEPTH
+#              value: "1"
+#            - name: GITSYNC_PERIOD
+#              value: "300s"
+#            - name: GITSYNC_USERNAME
+#              valueFrom:
+#                secretKeyRef:
+#                  name: git-credentials
+#                  key: GITSYNC_USERNAME
+#            - name: GITSYNC_PASSWORD
+#              valueFrom:
+#                secretKeyRef:
+#                  name: git-credentials
+#                  key: GITSYNC_PASSWORD
+#          volumeMounts:
+#            - name: dags
+#              mountPath: /git
       volumes:
         - name: dags
-          emptyDir: { }
-#      volumes:
-#        - name: dags
-#          persistentVolumeClaim:
-#            claimName: airflow-dags-pvc
-
+          persistentVolumeClaim:
+            claimName: airflow-dags-pvc
 ---
 apiVersion: v1
 kind: Service
