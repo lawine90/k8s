@@ -3,11 +3,8 @@ CLUSTER_NAME="${CLUSTER_NAME:-local-k8s}"
 ES_HOST="${ES_HOST:-local-es.duckdns.org}"
 KIBANA_HOST="${KIBANA_HOST:-local-kibana.duckdns.org}"
 ES_VERSION="${ES_VERSION:-8.14.3}"
-
-echo "클러스터 이름: ${CLUSTER_NAME}"
-echo "Elastic Version: ${ES_VERSION}"
-echo "Elastic Host: ${ES_HOST}"
-echo "Kibana Host: ${KIBANA_HOST}"
+AIRFLOW_HOST="${AIRFLOW_HOST:-local-airflow.duckdns.org}"
+AIRFLOW_VERSION="${AIRFLOW_VERSION:-2.10.2}"
 
 ### kind cluster create
 echo ">>> [1/6] kind 클러스터 생성: ${CLUSTER_NAME}"
@@ -56,7 +53,12 @@ echo ">>> [5/6] elastic 사용자 비밀번호 조회"
 ES_PW="$(kubectl -n elastic-stack get secret es-cluster-es-elastic-user -o go-template='{{.data.elastic | base64decode }}')"
 echo " - elastic 비밀번호: ${ES_PW}"
 
-echo ">>> [6/6] 접속 정보 요약"
+# airflow 설치
+echo ">>> [6/6] airflow 설치"
+kubectl apply -f ./_k8s/airflow.yaml
+
+
+echo ">>> 접속 정보 요약"
 cat <<INFO
 
 [도메인 매핑 필수: /etc/hosts]

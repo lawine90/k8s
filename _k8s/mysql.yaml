@@ -17,8 +17,8 @@ stringData:
   mysql-user: admin1
   mysql-password: admin1
   mysql-database: airflow_db
-  mysql-host: airflow-mysql.mysql.svc.cluster.local
-  mysql-conn-url: mysql+mysqldb://admin1:admin1@airflow-mysql.mysql.svc.cluster.local:3306/airflow_db
+  mysql-host: mysql.mysql.svc.cluster.local
+  mysql-conn-url: mysql+mysqldb://admin1:admin1@mysql.mysql.svc.cluster.local:3306/airflow_db
 ---
 
 # MySQL 데이터 저장용 PVC
@@ -40,23 +40,26 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: airflow-mysql
+  name: mysql
   namespace: mysql
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: airflow-mysql
+      app: mysql
+  strategy:
+    type: Recreate
   template:
     metadata:
       labels:
-        app: airflow-mysql
+        app: mysql
     spec:
       containers:
         - name: mysql
           image: mysql:8.0
           ports:
-            - containerPort: 3306
+            - name: mysql
+              containerPort: 3306
           env:
             - name: MYSQL_ROOT_PASSWORD
               valueFrom:
@@ -79,10 +82,10 @@ spec:
                   name: mysql-secret
                   key: mysql-database
           volumeMounts:
-            - name: mysql-storage
+            - name: mysql-persistent-storage
               mountPath: /var/lib/mysql
       volumes:
-        - name: mysql-storage
+        - name: mysql-persistent-storage
           persistentVolumeClaim:
             claimName: mysql-pvc
 ---
@@ -91,7 +94,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: airflow-mysql
+  name: mysql
   namespace: mysql
 spec:
   type: ClusterIP
@@ -99,4 +102,4 @@ spec:
     - port: 3306
       targetPort: 3306
   selector:
-    app: airflow-mysql
+    app: mysql

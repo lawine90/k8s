@@ -1,10 +1,51 @@
-# 클러스터에 에어플로우용 네임스페이스 생성
+# ================================================
+# 1. Airflow Namespace
+# ================================================
 apiVersion: v1
 kind: Namespace
 metadata:
   name: airflow
 ---
 
+
+# ================================================
+# 2. Airflow RBAC (KubernetesExecutor 필수)
+# ================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: airflow-scheduler
+  namespace: airflow
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-scheduler-role
+  namespace: airflow
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-scheduler-rolebinding
+  namespace: airflow
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: airflow-scheduler-role
+subjects:
+  - kind: ServiceAccount
+    name: airflow-scheduler
+    namespace: airflow
+---
+
+
+# ================================================
+# 3. Airflow Base (Namespace, Config, Secret, DBs)
+# ================================================
 # 에어플로우 config map 및 secret
 apiVersion: v1
 kind: ConfigMap
@@ -12,10 +53,11 @@ metadata:
   name: airflow-config
   namespace: airflow
 data:
-  AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+  #AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+  AIRFLOW__CORE__EXECUTOR: KubernetesExecutor
   AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgresql:5432/airflow
-  AIRFLOW__CELERY__BROKER_URL: redis://airflow-redis:6379/0
-  AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-postgresql:5432/airflow
+  #AIRFLOW__CELERY__BROKER_URL: redis://airflow-redis:6379/0
+  #AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-postgresql:5432/airflow
   AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
   AIRFLOW__WEBSERVER__WEB_SERVER_PORT: "8080"
 
@@ -27,30 +69,29 @@ data:
   AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "120"
 
   # mysql access config
-  MYSQL_HOST: airflow-mysql.mysql.svc.cluster.local
+  MYSQL_HOST: mysql.mysql.svc.cluster.local
   MYSQL_PORT: "3306"
   MYSQL_USER: admin1
   MYSQL_PASSWORD: admin1
   MYSQL_DATABASE: airflow_db
-  #MYSQL_CONN_URL: "mysql+pymysql://admin1:admin1@airflow-mysql.mysql.svc.cluster.local:3306/airflow_db"
 
   # worker의 task remote 로깅
   AIRFLOW__LOGGING__REMOTE_LOGGING: "True"
   AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: "s3://airflow-logs/"
   AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID: "minio_default"
+
+  # [KubernetesExecutor 추가 설정]
+  AIRFLOW__KUBERNETES__NAMESPACE: airflow
+
+  # 워커 파드가 떴을 때 DAG PVC를 자동으로 마운트하도록 설정
+  AIRFLOW__KUBERNETES__DAGS_VOLUME_CLAIM: airflow-dags-pvc
+  AIRFLOW__KUBERNETES__DAGS_VOLUME_MOUNT_POINT: /opt/airflow/dags
+  AIRFLOW__KUBERNETES__DAGS_VOLUME_SUBPATH: repo/dags
+
+  # 워커 파드가 Git-Sync와 동일한 그룹 권한을 갖도록 설정
+  AIRFLOW__KUBERNETES__WORKER_POD_FS_GROUP: "65533"
 ---
 
-apiVersion: v1
-kind: Secret
-metadata:
-  name: airflow-fernet-key
-  namespace: airflow
-type: Opaque
-stringData:
-  fernet-key: qz3pRw__AFapmX1aL4Bj34g3-MjyebVxvQCdxAyRiqM=
----
-
-# 메타데이터용 postgre sql 생성
 apiVersion: v1
 kind: Secret
 metadata:
@@ -62,18 +103,17 @@ stringData:
   postgres-password: airflow
   postgres-db: airflow
 ---
+
 apiVersion: v1
 kind: Service
 metadata:
   name: airflow-postgresql
   namespace: airflow
 spec:
-  ports:
-    - port: 5432
-      targetPort: 5432
-  selector:
-    app: airflow-postgresql
+  ports: [{port: 5432, targetPort: 5432}]
+  selector: {app: airflow-postgresql}
 ---
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -118,40 +158,40 @@ spec:
           emptyDir: {}
 ---
 
-# 셀러리 브로커용 레디스
-apiVersion: v1
-kind: Service
-metadata:
-  name: airflow-redis
-  namespace: airflow
-spec:
-  ports:
-    - port: 6379
-      targetPort: 6379
-  selector:
-    app: airflow-redis
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: airflow-redis
-  namespace: airflow
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: airflow-redis
-  template:
-    metadata:
-      labels:
-        app: airflow-redis
-    spec:
-      containers:
-        - name: redis
-          image: redis:7
-          ports:
-            - containerPort: 6379
----
+## 셀러리 브로커용 레디스
+#apiVersion: v1
+#kind: Service
+#metadata:
+#  name: airflow-redis
+#  namespace: airflow
+#spec:
+#  ports:
+#    - port: 6379
+#      targetPort: 6379
+#  selector:
+#    app: airflow-redis
+#---
+#apiVersion: apps/v1
+#kind: Deployment
+#metadata:
+#  name: airflow-redis
+#  namespace: airflow
+#spec:
+#  replicas: 1
+#  selector:
+#    matchLabels:
+#      app: airflow-redis
+#  template:
+#    metadata:
+#      labels:
+#        app: airflow-redis
+#    spec:
+#      containers:
+#        - name: redis
+#          image: redis:7
+#          ports:
+#            - containerPort: 6379
+#---
 
 # minio dag task logging용 저장소
 apiVersion: v1
@@ -221,6 +261,103 @@ spec:
           emptyDir: {}
 ---
 
+# ================================================
+# 3. Airflow DAGs Storage (RWX PVC via NFS)
+# ================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags-pvc
+  namespace: airflow
+spec:
+  accessModes:
+    - ReadWriteMany  # NFS 덕분에 여러 파드에서 동시 읽기/쓰기 가능
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nfs-client # 위에서 만든 StorageClass 사용
+---
+
+
+# ================================================
+# 4. Standalone Git-Sync Deployment
+# ================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: git-credentials
+  namespace: airflow
+data:
+  # 기존 값 유지
+  GITSYNC_USERNAME: biBsYXdpbmU5MAo=
+  GITSYNC_PASSWORD: biBnaXRodWJfcGF0XzExQUxaWFk3UTBhREpiOFVMaFJJaXdfNlF2Q1FWN0dJWW5FcEc1RzJRZXBERFVUSzFWTTA3TENTRElQalVSbXhSTEczQ09XM0JRbTFhM240TEEK
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: git-sparse-config
+  namespace: airflow
+data:
+  sparse-checkout-paths: |
+    dags/
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-git-sync
+  namespace: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-git-sync
+  template:
+    metadata:
+      labels:
+        app: airflow-git-sync
+    spec:
+      securityContext:
+        fsGroup: 65533 # Airflow 그룹 권한으로 파일 생성
+      containers:
+        - name: git-sync
+          image: registry.k8s.io/git-sync/git-sync:v4.3.0
+          env:
+            - name: GITSYNC_REPO
+              value: "https://github.com/lawine90/k8s.git"
+            - name: GITSYNC_REF
+              value: "main"
+            - name: GITSYNC_ROOT
+              value: "/git"
+            - name: GITSYNC_DEST
+              value: "repo"
+            - name: GITSYNC_DEPTH
+              value: "1"
+            - name: GITSYNC_PERIOD
+              value: "60s" # 단독 실행이므로 갱신 주기를 조금 더 짧게 설정해도 부담이 적음
+            #- name: GITSYNC_SPARSE_CHECKOUT_FILE
+            #  value: "/etc/git-sparse/sparse-checkout-paths"
+            - name: GITSYNC_USERNAME
+              valueFrom: {secretKeyRef: {name: git-credentials, key: GITSYNC_USERNAME}}
+            - name: GITSYNC_PASSWORD
+              valueFrom: {secretKeyRef: {name: git-credentials, key: GITSYNC_PASSWORD}}
+          volumeMounts:
+            - name: dags
+              mountPath: /git       # 여기에 repo 디렉토리가 생성됨 (/git/repo/dags/...)
+            #- name: git-sparse
+            #  mountPath: /etc/git-sparse
+      volumes:
+        - name: dags
+          persistentVolumeClaim:
+            claimName: airflow-dags-pvc
+        #- name: git-sparse
+        #  configMap:
+        #    name: git-sparse-config
+---
+
+
+# ================================================
+# 5. Airflow Init
+# ================================================
 # 초기 job 생성:
 # 1. DB 초기화: airflow는 초기 실행 시 airflow db init 또는 airflow db upgrade를 실행해서 메타데이터 DB에 스키마를 생성해야함
 #   초기화를 해줘야 webserver, scheduler, worker에서 DB에 접속이 가능함
@@ -273,30 +410,9 @@ spec:
               echo "Airflow initialization completed."
 ---
 
-# git-sync용 credential
-apiVersion: v1
-kind: Secret
-metadata:
-  name: git-credentials
-  namespace: airflow
-data:
-  GITSYNC_USERNAME: biBsYXdpbmU5MAo=
-  GITSYNC_PASSWORD: biBnaXRodWJfcGF0XzExQUxaWFk3UTBhREpiOFVMaFJJaXdfNlF2Q1FWN0dJWW5FcEc1RzJRZXBERFVUSzFWTTA3TENTRElQalVSbXhSTEczQ09XM0JRbTFhM240TEEK
----
-
-# 레포의 특정 path만 클론하기 위한 config
-# 레포를 모두 클론할 필요는 없으므로 특정 path만 클론
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: git-sparse-config
-  namespace: airflow
-data:
-  sparse-checkout-paths: |
-    dags/
----
-
-### airflow component: webserver, scheduler, worker
+# ================================================
+# 5. Airflow Core Components
+# ================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -312,23 +428,10 @@ spec:
       labels:
         app: airflow-webserver
     spec:
-      # Git-sync가 접근하는 볼륨의 권한을 65533:65533으로 강제 설정
-      initContainers:
-        - name: fix-permissions
-          image: busybox:1.36
-          command: [ "sh", "-c", "chown -R 65533:65533 /git" ]
-          securityContext:
-            # Init 컨테이너가 chown을 실행하기 위해 root 권한이 필요
-            runAsUser: 0
-          volumeMounts:
-            - name: dags
-              mountPath: /git
-      # Airflow 프로세스가 생성하는 파일의 그룹을 65533으로 설정하여 Git-sync가 삭제할 수 있도록 함
       securityContext:
         fsGroup: 65533
       containers:
         - name: webserver
-          #image: apache/airflow:2.10.2
           image: labineseo90/airflow:2.10.5-custom
           args: ["webserver"]
           envFrom:
@@ -340,50 +443,12 @@ spec:
           volumeMounts:
             - name: dags
               mountPath: /opt/airflow/dags
-              subPath: k8s.git/dags
+              subPath: repo/dags
               readOnly: true
-        - name: git-sync
-          image: registry.k8s.io/git-sync/git-sync:v4.3.0
-          args:
-            - --sparse-checkout-file=/etc/git-sparse/sparse-checkout-paths
-          env:
-            - name: GITSYNC_REPO
-              value: "https://github.com/lawine90/k8s.git"
-            - name: GITSYNC_REF
-              value: "main"
-            - name: GITSYNC_ROOT
-              value: "/git"
-            - name: GITSYNC_DEST
-              value: ""
-            - name: GITSYNC_DEPTH
-              value: "1"
-            - name: GITSYNC_PERIOD
-              value: "300s"
-            - name: GITSYNC_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: git-credentials
-                  key: GITSYNC_USERNAME
-            - name: GITSYNC_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: git-credentials
-                  key: GITSYNC_PASSWORD
-          volumeMounts:
-            - name: dags
-              mountPath: /git
-            - name: git-sparse
-              mountPath: /etc/git-sparse
       volumes:
         - name: dags
           persistentVolumeClaim:
             claimName: airflow-dags-pvc
-        - name: git-sparse
-          configMap:
-            name: git-sparse-config
-            items:
-              - key: sparse-checkout-paths
-                path: sparse-checkout-paths
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -400,23 +465,11 @@ spec:
       labels:
         app: airflow-scheduler
     spec:
-      # Git-sync가 접근하는 볼륨의 권한을 65533:65533으로 강제 설정
-      initContainers:
-        - name: fix-permissions
-          image: busybox:1.36
-          command: [ "sh", "-c", "chown -R 65533:65533 /git" ]
-          securityContext:
-            # Init 컨테이너가 chown을 실행하기 위해 root 권한이 필요
-            runAsUser: 0
-          volumeMounts:
-            - name: dags
-              mountPath: /git
-      # Airflow 프로세스가 생성하는 파일의 그룹을 65533으로 설정하여 Git-sync가 삭제할 수 있도록 함
+      serviceAccountName: airflow-scheduler
       securityContext:
         fsGroup: 65533
       containers:
         - name: scheduler
-          #image: apache/airflow:2.10.2
           image: labineseo90/airflow:2.10.5-custom
           args: ["scheduler"]
           envFrom:
@@ -425,120 +478,49 @@ spec:
           volumeMounts:
             - name: dags
               mountPath: /opt/airflow/dags
-              subPath: k8s.git/dags
+              subPath: repo/dags
               readOnly: true
-        - name: git-sync
-          image: registry.k8s.io/git-sync/git-sync:v4.3.0
-          args:
-            - --sparse-checkout-file=/etc/git-sparse/sparse-checkout-paths
-          env:
-            - name: GITSYNC_REPO
-              value: "https://github.com/lawine90/k8s.git"
-            - name: GITSYNC_REF
-              value: "main"
-            - name: GITSYNC_ROOT
-              value: "/git"
-            - name: GITSYNC_DEST
-              value: ""
-            - name: GITSYNC_DEPTH
-              value: "1"
-            - name: GITSYNC_PERIOD
-              value: "300s"
-            - name: GITSYNC_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: git-credentials
-                  key: GITSYNC_USERNAME
-            - name: GITSYNC_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: git-credentials
-                  key: GITSYNC_PASSWORD
-          volumeMounts:
-            - name: dags
-              mountPath: /git
-            - name: git-sparse
-              mountPath: /etc/git-sparse
       volumes:
         - name: dags
           persistentVolumeClaim:
             claimName: airflow-dags-pvc
-        - name: git-sparse
-          configMap:
-            name: git-sparse-config
-            items:
-              - key: sparse-checkout-paths
-                path: sparse-checkout-paths
-#      # pvc mount
+---
+#apiVersion: apps/v1
+#kind: Deployment
+#metadata:
+#  name: airflow-worker
+#  namespace: airflow
+#spec:
+#  replicas: 1
+#  selector:
+#    matchLabels:
+#      app: airflow-worker
+#  template:
+#    metadata:
+#      labels:
+#        app: airflow-worker
+#    spec:
+#      securityContext:
+#        fsGroup: 65533
+#      containers:
+#        - name: worker
+#          #image: apache/airflow:2.10.2
+#          image: labineseo90/airflow:2.10.5-custom
+#          args: ["celery", "worker"]
+#          envFrom:
+#            - configMapRef:
+#                name: airflow-config
+#          # dag 저장용 pvc mount
+#          volumeMounts:
+#            - name: dags
+#              mountPath: /opt/airflow/dags
+#              subPath: repo/dags
+#              readOnly: true
 #      volumes:
 #        - name: dags
 #          persistentVolumeClaim:
 #            claimName: airflow-dags-pvc
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: airflow-worker
-  namespace: airflow
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: airflow-worker
-  template:
-    metadata:
-      labels:
-        app: airflow-worker
-    spec:
-      securityContext:
-        fsGroup: 65533
-      containers:
-        - name: worker
-          #image: apache/airflow:2.10.2
-          image: labineseo90/airflow:2.10.5-custom
-          args: ["celery", "worker"]
-          envFrom:
-            - configMapRef:
-                name: airflow-config
-          # dag 저장용 pvc mount
-          volumeMounts:
-            - name: dags
-              mountPath: /opt/airflow/dags
-              subPath: k8s.git/dags
-              readOnly: true
-#        - name: git-sync
-#          image: registry.k8s.io/git-sync/git-sync:v4.3.0
-#          env:
-#            - name: GITSYNC_REPO
-#              value: "https://github.com/lawine90/k8s.git"
-#            - name: GITSYNC_REF
-#              value: "main"
-#            - name: GITSYNC_ROOT
-#              value: "/git"
-#            - name: GITSYNC_DEST
-#              value: ""
-#            - name: GITSYNC_DEPTH
-#              value: "1"
-#            - name: GITSYNC_PERIOD
-#              value: "300s"
-#            - name: GITSYNC_USERNAME
-#              valueFrom:
-#                secretKeyRef:
-#                  name: git-credentials
-#                  key: GITSYNC_USERNAME
-#            - name: GITSYNC_PASSWORD
-#              valueFrom:
-#                secretKeyRef:
-#                  name: git-credentials
-#                  key: GITSYNC_PASSWORD
-#          volumeMounts:
-#            - name: dags
-#              mountPath: /git
-      volumes:
-        - name: dags
-          persistentVolumeClaim:
-            claimName: airflow-dags-pvc
----
+#---
 apiVersion: v1
 kind: Service
 metadata:
@@ -575,34 +557,4 @@ spec:
                 name: airflow-webserver
                 port:
                   number: 8080
----
-
-# dag 생성용 pvc
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: airflow-dags-pv
-spec:
-  capacity:
-    storage: 1Gi
-  accessModes:
-    - ReadWriteMany
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: standard
-  hostPath:
-    path: /mnt/data/airflow/dags
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: airflow-dags-pvc
-  namespace: airflow
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
-  storageClassName: standard
 ---

@@ -1,0 +1,196 @@
+# ================================================
+# 1. NFS System (Server + Provisioner)
+# ================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nfs-system
+---
+
+# [NFS Server] 실제 스토리지 역할을 하는 인클러스터 NFS 서버
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-server
+  namespace: nfs-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nfs-server
+  template:
+    metadata:
+      labels:
+        app: nfs-server
+    spec:
+      containers:
+        - name: nfs-server
+          image: itsthenetwork/nfs-server-alpine:12
+          env:
+            # 이 이미지는 이 환경변수가 필수입니다.
+            - name: SHARED_DIRECTORY
+              value: /data
+          ports:
+            - name: nfs
+              containerPort: 2049
+            - name: mountd
+              containerPort: 20048
+            - name: rpcbind
+              containerPort: 111
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /data
+              name: mypvc
+      volumes:
+        - name: mypvc
+          emptyDir: {}  # 테스트용 임시 저장소 (재시작 시 데이터 초기화됨)
+---
+
+# [NFS Service] Provisioner가 접근할 수 있는 NFS 서버 주소
+apiVersion: v1
+kind: Service
+metadata:
+  name: nfs-server
+  namespace: nfs-system
+spec:
+  ports:
+    - name: nfs
+      port: 2049
+    - name: mountd
+      port: 20048
+    - name: rpcbind
+      port: 111
+  selector:
+    app: nfs-server
+---
+
+# [NFS Provisioner] RBAC 설정
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nfs-provisioner
+  namespace: nfs-system
+---
+
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: nfs-provisioner-runner
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: run-nfs-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: nfs-provisioner
+    namespace: nfs-system
+roleRef:
+  kind: ClusterRole
+  name: nfs-provisioner-runner
+  apiGroup: rbac.authorization.k8s.io
+---
+
+# [NFS Provisioner] Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nfs-provisioner
+  namespace: nfs-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nfs-provisioner
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: nfs-provisioner
+    spec:
+      serviceAccountName: nfs-provisioner
+      containers:
+        - name: nfs-provisioner
+          image: k8s.gcr.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2
+          volumeMounts:
+            - name: nfs-client-root
+              mountPath: /persistentvolumes
+          env:
+            - name: PROVISIONER_NAME
+              value: k8s-sigs.io/nfs-subdir-external-provisioner
+            - name: NFS_SERVER
+              value: 10.96.152.205
+            - name: NFS_PATH
+              value: /  # NFS Server가 공유하는 경로
+      volumes:
+        - name: nfs-client-root
+          persistentVolumeClaim:
+            claimName: nfs-provisioner-root-pvc
+---
+
+# [StorageClass]
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-client
+provisioner: k8s-sigs.io/nfs-subdir-external-provisioner
+parameters:
+  archiveOnDelete: "false"
+---
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nfs-provisioner-root-pv
+spec:
+  capacity:
+    storage: 1Gi  # 메타데이터용이라 크기는 중요하지 않음
+  accessModes:
+    - ReadWriteMany
+  mountOptions:    # [핵심] 연결 문제를 해결할 마운트 옵션
+    - nfsvers=4    # 호환성이 좋은 NFSv3 강제 사용
+    - tcp          # UDP 대신 안정적인 TCP 강제 사용
+    - nolock       # 로컬 환경에서 자주 발생하는 잠금 문제 방지
+  nfs:
+    # 로컬 k8s 환경에서는 worker node가 도메인 이름을 해석하지 못해서 타임아웃 발생.
+    # 불가피하게 도메인이름 대신 cluster ip 확인 후 직접 입력
+    # itsthenetwork/nfs-server-alpine:12 이미지의 경우 NFSv4 환경에서 잘 동작하도록 fsid=0 옵션이 하드코딩 되어 있음
+    #   그러한 경우 path를 root로 설정해야 함.
+    server: 10.96.152.205
+    #path: /data
+    path: /
+  storageClassName: "" # 정적 바인딩을 위해 비워둠
+---
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nfs-provisioner-root-pvc
+  namespace: nfs-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: nfs-provisioner-root-pv # 위에서 만든 PV와 직접 연결
+  storageClassName: ""
