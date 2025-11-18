@@ -29,7 +29,7 @@ kubectl cluster-info --context kind-local-k8s
 
 # install ingress
 echo ">>> [2/6] NGINX Ingress Controller 설치 (kind 전용 매니페스트)"
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.1/deploy/static/provider/kind/deploy.yaml
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml
 kubectl wait --namespace ingress-nginx \
   --for=condition=Available deploy/ingress-nginx-controller \
   --timeout=120s

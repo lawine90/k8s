@@ -14,19 +14,20 @@ nodes:                                # kind 클러스터를 구성할 노드들
         hostPort: 80                  # 로컬 머신(호스트)의 80포트
       - containerPort: 443            # 컨테이너의 443 포트
         hostPort: 443                 # 로컬 머신의 443 포트
+        protocol: TCP
   - role: worker
-    kubeadmConfigPatches:
-      - |
-        kind: JoinConfiguration
-        nodeRegistration:
-          kubeletExtraArgs:
-            node-labels: "env=dev,region=ap-northeast"      # 개발환경 라벨
-            eviction-hard: "memory.available<100Mi,nodefs.available<1Gi,imagefs.available<1Gi"
+#    kubeadmConfigPatches:
+#      - |
+#        kind: JoinConfiguration
+#        nodeRegistration:
+#          kubeletExtraArgs:
+#            node-labels: "env=dev,region=ap-northeast"      # 개발환경 라벨
+#            eviction-hard: "memory.available<100Mi,nodefs.available<1Gi,imagefs.available<1Gi"
   - role: worker
-    kubeadmConfigPatches:
-      - |
-        kind: JoinConfiguration
-        nodeRegistration:
-        kubeletExtraArgs:
-        node-labels: "env=cbt,region=ap-northeast"      # cbt 환경 라벨
-        eviction-hard: "memory.available<200Mi,nodefs.available<1Gi,imagefs.available<1Gi"
+#    kubeadmConfigPatches:
+#      - |
+#        kind: JoinConfiguration
+#        nodeRegistration:
+#        kubeletExtraArgs:
+#        node-labels: "env=cbt,region=ap-northeast"      # cbt 환경 라벨
+#        eviction-hard: "memory.available<200Mi,nodefs.available<1Gi,imagefs.available<1Gi"

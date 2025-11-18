@@ -5,3 +5,9 @@
 /.idea/vcs.xml
 /.idea/workspace.xml
 /.idea/
+
+
+# 모델 파일 무시
+*.safetensors
+*.bin
+was/autocomplete/model/
