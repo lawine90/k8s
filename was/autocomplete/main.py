@@ -265,7 +265,7 @@ def get_recommendations(
 
 
 # --- 6. API 엔드포인트 ---
-@app.get("/api/search", response_model=ResultResponse)
+@app.get("/api/v1/search", response_model=ResultResponse)
 async def autocomplete(
         q: str = Query(
             ...,

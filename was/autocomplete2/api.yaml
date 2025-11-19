@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autocomplete
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autocomplete-api-deploy2 # 배포 이름
+  namespace: autocomplete
+spec:
+  replicas: 1 # 2개의 Pod(컨테이너)를 실행 (안정성을 위해)
+  selector:
+    matchLabels:
+      app: autocomplete-api2 # 이 라벨로 Pod를 찾음
+  template:
+    metadata:
+      labels:
+        app: autocomplete-api2 # Pod에 붙일 라벨
+    spec:
+      containers:
+        - name: api-container
+          image: labineseo90/autocomplete-api:v2.2 # 우리가 빌드한 도커 이미지
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000 # Dockerfile에서 EXPOSE한 포트
+
+          # api resource
+          resources:
+            requests: # 최소 이만큼 보장해줘
+              memory: "4Gi"  # 모델이 크므로 2GB 요청
+              cpu: "250m"   # 1 CPU core 요청
+            limits: # 이 이상은 쓰지마
+              memory: "8Gi"
+              cpu: "2000m"
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: autocomplete-api-service2 # 서비스 이름
+  namespace: autocomplete
+spec:
+  type: ClusterIP # 내부 전용 IP
+  selector:
+    app: autocomplete-api2 # 이 라벨을 가진 Pod(Deployment가 만든)를 찾아서 연결
+  ports:
+    - protocol: TCP
+      port: 80       # 서비스 자체의 내부 포트
+      targetPort: 8000 # Pod(컨테이너)가 열어둔 8000번 포트
+---
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: autocomplete-ingress2
+  namespace: autocomplete
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: "autocomplete-api.local"
+      http:
+        paths:
+          - path: "/api/v2"
+            pathType: Prefix
+            backend:
+              service:
+                name: autocomplete-api-service2
+                port:
+                  number: 80

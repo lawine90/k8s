@@ -10,7 +10,7 @@ metadata:
   name: autocomplete-api-deploy # 배포 이름
   namespace: autocomplete
 spec:
-  replicas: 2  # 2개의 Pod(컨테이너)를 실행 (안정성을 위해)
+  replicas: 1 # 2개의 Pod(컨테이너)를 실행 (안정성을 위해)
   selector:
     matchLabels:
       app: autocomplete-api # 이 라벨로 Pod를 찾음
@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: api-container
-          image: labineseo90/autocomplete-api:v4.1 # 우리가 빌드한 도커 이미지
+          image: labineseo90/autocomplete-api:v1.5 # 우리가 빌드한 도커 이미지
           imagePullPolicy: Always
           ports:
             - containerPort: 8000 # Dockerfile에서 EXPOSE한 포트
@@ -54,7 +54,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: autocomplete-ingress
+  name: autocomplete-ingress1
   namespace: autocomplete
 spec:
   ingressClassName: nginx
@@ -62,7 +62,7 @@ spec:
     - host: "autocomplete-api.local"
       http:
         paths:
-          - path: "/"
+          - path: "/api/v1"
             pathType: Prefix
             backend:
               service:
