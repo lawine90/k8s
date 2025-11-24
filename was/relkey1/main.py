@@ -1,9 +1,10 @@
 import re
 import os
+import math
 import boto3
 import torch
 import logging
-from typing import List
+from typing import List, Tuple
 
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
@@ -15,9 +16,10 @@ logger = logging.getLogger(__name__)
 
 
 # --- 응답 모델 정의 ---
-class RelatedQueryResponse(BaseModel):
+class RelkeyResponse(BaseModel):
     q: str
-    related_keywords: List[str]
+    p: float
+    subkeys: List[str]
 
 
 # --- 1. FastAPI 앱 정의 ---
@@ -109,7 +111,7 @@ def normalize_text(text: str) -> str:
 
 
 # --- 4. 연관 검색어 생성 로직 ---
-def generate_keywords(query: str, num_results: int = 10) -> List[str]:
+def generate_keywords(query: str, num_results: int = 10) -> Tuple[float, List[str]]:
     global model, tokenizer
 
     prompt = (
@@ -129,10 +131,18 @@ def generate_keywords(query: str, num_results: int = 10) -> List[str]:
             early_stopping=True,
             repetition_penalty=1.2,
             eos_token_id=tokenizer.eos_token_id,
-            pad_token_id=tokenizer.eos_token_id
+            return_dict_in_generate=True,
+            output_scores=True
         )
 
-    full_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    sequence_prob = 0.0
+    if hasattr(outputs, 'sequences_scores'):
+        # Log Probability의 합이므로 exp를 취하면 확률이 됩니다.
+        # 값이 매우 작을 수 있으므로 상황에 따라 정규화가 필요할 수 있습니다.
+        sequence_prob = math.exp(outputs.sequences_scores[0].item())
+
+    output_sequence = outputs.sequences[0]
+    full_text = tokenizer.decode(output_sequence, skip_special_tokens=True)
 
     try:
         if "### Response:\n" in full_text:
@@ -171,7 +181,7 @@ def generate_keywords(query: str, num_results: int = 10) -> List[str]:
             seen_normalized.add(norm_k)
             final_keywords.append(k)
 
-        return final_keywords[:num_results]
+        return sequence_prob, final_keywords[:num_results]
 
     except Exception as e:
         logger.warning(f"파싱 에러: {e}")
@@ -179,7 +189,7 @@ def generate_keywords(query: str, num_results: int = 10) -> List[str]:
 
 
 # --- 5. API 엔드포인트 ---
-@app.get("/api/v1/related/search", response_model=RelatedQueryResponse)
+@app.get("/api/v1/related/search", response_model=RelkeyResponse)
 async def get_related(
         q: str = Query(..., title="Query", min_length=1),
         n: int = Query(5, title="Number of keywords")
@@ -187,11 +197,12 @@ async def get_related(
     """
     Qwen 모델을 사용하여 연관 검색어를 생성합니다.
     """
-    keywords = generate_keywords(q, num_results=n)
+    prob, keywords = generate_keywords(q, num_results=n)
 
     return {
         "q": q,
-        "related_keywords": keywords
+        "p": prob,
+        "subkeys": keywords
     }
 
 
