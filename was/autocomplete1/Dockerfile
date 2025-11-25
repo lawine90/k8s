@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 4. 모델과 소스코드 복사
 # (FastAPI 앱 코드 복사)
-COPY main.py .
+COPY ../autocomplete/main.py .
 ## (모델 폴더 복사) <- k8s cluster 내부에 띄운 minIO로 대체
 #COPY ./model ./model
 

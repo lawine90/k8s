@@ -1,5 +1,8 @@
-import re
 import os
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+import re
 import math
 import boto3
 import torch
@@ -8,7 +11,9 @@ from typing import List, Tuple
 
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from llama_cpp import Llama
+from transformers import AutoModelForCausalLM, PreTrainedTokenizerFast, AutoTokenizer
+
 
 # --- 로깅 설정 ---
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +46,7 @@ def load_model():
 
     # 로컬 테스트용
     save_dir = "./model"
+    gguf_filename = "qwen-relkey-q4.gguf"
 
     # MinIO 사용 시
     # # K8s 내부 MinIO 설정 (기존과 동일)
@@ -81,19 +87,27 @@ def load_model():
     # logger.info("--- ✅ 다운로드 완료. 모델 로딩 시작... ---")
 
     try:
-        # Qwen 모델 로드
-        tokenizer = AutoTokenizer.from_pretrained(save_dir, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(
-            save_dir,
-            device_map="auto",      # CPU/GPU 자동 할당
-            torch_dtype=torch.float16, # 메모리 최적화
-            trust_remote_code=True
+        # # Qwen 모델 로드
+        # tokenizer = AutoTokenizer.from_pretrained(save_dir, trust_remote_code=True)
+        # model = AutoModelForCausalLM.from_pretrained(
+        #     save_dir,
+        #     device_map="auto",      # CPU/GPU 자동 할당
+        #     torch_dtype=torch.float16, # 메모리 최적화
+        #     trust_remote_code=True
+        # )
+        # gguf model load
+        model = Llama(
+            model_path=f"{save_dir}/{gguf_filename}",
+            n_ctx=256,        # 문맥 길이 (입력+출력)
+            n_threads=4,      # CPU 코어 사용 개수 (K8s Limit에 맞춤)
+            n_gpu_layers=0,   # CPU 전용 (GPU 있다면 -1 또는 레이어 수 지정)
+            verbose=False     # 로그 끄기 (성능 향상)
         )
     except Exception as e:
         logger.error(f"❌ 모델 로드 실패: {e}")
         raise e
 
-    logger.info(f"--- Qwen 모델 로딩 완료 (Device: {model.device}) ---")
+    logger.info(f"--- Qwen 모델 로딩 완료 ---")
 
 
 # --- 4. 연관 검색어 생성 로직 ---
@@ -111,8 +125,8 @@ def normalize_text(text: str) -> str:
 
 
 # --- 4. 연관 검색어 생성 로직 ---
-def generate_keywords(query: str, num_results: int = 10) -> Tuple[float, List[str]]:
-    global model, tokenizer
+def generate_keywords(query: str, num_results: int = 10) -> List[str]:
+    global model
 
     prompt = (
         f"### Instruction:\n{INSTRUCTION_TEXT}\n\n"
@@ -120,71 +134,38 @@ def generate_keywords(query: str, num_results: int = 10) -> Tuple[float, List[st
         f"### Response:\n"
     )
 
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=128,
-            do_sample=False,
-            num_beams=3,
-            early_stopping=True,
-            repetition_penalty=1.2,
-            eos_token_id=tokenizer.eos_token_id,
-            return_dict_in_generate=True,
-            output_scores=True
+    try:
+        # 🌟 Llama-cpp 추론 실행
+        output = model(
+            prompt,
+            max_tokens=64,       # 생성 길이 제한 (짧게)
+            stop=["<|endoftext|>", "###", "\n"], # 멈춤 조건 (필수!)
+            echo=False,          # 프롬프트 제외하고 결과만 받음
+            temperature=0.1,     # 낮은 온도로 고정된 결과 유도 (Deterministic)
+            top_p=0.9,
+            repeat_penalty=1.2   # 반복 방지
         )
 
-    sequence_prob = 0.0
-    if hasattr(outputs, 'sequences_scores'):
-        # Log Probability의 합이므로 exp를 취하면 확률이 됩니다.
-        # 값이 매우 작을 수 있으므로 상황에 따라 정규화가 필요할 수 있습니다.
-        sequence_prob = math.exp(outputs.sequences_scores[0].item())
+        # 결과 텍스트 추출
+        generated_text = output['choices'][0]['text'].strip()
 
-    output_sequence = outputs.sequences[0]
-    full_text = tokenizer.decode(output_sequence, skip_special_tokens=True)
-
-    try:
-        if "### Response:\n" in full_text:
-            generated_text = full_text.split("### Response:\n")[1].strip()
-        else:
-            generated_text = full_text
-
-        # 1차 분리
         raw_keywords = [k.strip() for k in generated_text.split(',') if k.strip()]
 
-        # 🌟 [수정] 중복 및 유사 변형 필터링 로직
         final_keywords = []
-        seen_normalized = set()
-
-        # 입력 쿼리도 정규화해서 제외 목록에 추가 (자기 자신 추천 방지)
-        query_normalized = normalize_text(query)
-        seen_normalized.add(query_normalized)
+        seen = set()
+        seen.add(normalize_text(query))  # 자기 자신 제외
 
         for k in raw_keywords:
-            # 1. 너무 짧은 단어 제외 (1글자)
-            if len(k) < 2:
-                continue
-
-            # 2. 정규화 후 중복 검사
-            norm_k = normalize_text(k)
-
-            if not norm_k: # 정규화했더니 빈 문자열이면 제외
-                continue
-
-            if norm_k in seen_normalized:
-                continue
-
-            # 3. 포함 관계 필터링 (선택 사항: "팝마트"가 있는데 "팝마트 코리아"가 나오면 허용할지 말지)
-            # 여기서는 단순히 '정확히 같은 변형'만 막습니다.
-
-            seen_normalized.add(norm_k)
+            if len(k) < 2: continue
+            norm = normalize_text(k)
+            if not norm or norm in seen: continue
+            seen.add(norm)
             final_keywords.append(k)
 
-        return sequence_prob, final_keywords[:num_results]
+        return final_keywords[:num_results]
 
     except Exception as e:
-        logger.warning(f"파싱 에러: {e}")
+        logger.error(f"Inference Error: {e}")
         return []
 
 
@@ -197,11 +178,11 @@ async def get_related(
     """
     Qwen 모델을 사용하여 연관 검색어를 생성합니다.
     """
-    prob, keywords = generate_keywords(q, num_results=n)
+    keywords = generate_keywords(q, num_results=n)
 
     return {
         "q": q,
-        "p": prob,
+        "p": 0.0,
         "subkeys": keywords
     }
 
