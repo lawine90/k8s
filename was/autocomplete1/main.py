@@ -1,4 +1,5 @@
 import os
+
 import boto3
 import torch
 import pytrie
@@ -8,8 +9,8 @@ from enum import Enum
 from functools import lru_cache
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
-from transformers import AutoModelForCausalLM, PreTrainedTokenizerFast
 from typing import List, Tuple
+from transformers import AutoModelForCausalLM, PreTrainedTokenizerFast, AutoTokenizer, AutoConfig
 
 # --- 로깅 설정 ---
 logging.basicConfig(level=logging.INFO)
@@ -120,18 +121,25 @@ def load_model_and_vocab():
     #     logger.error(f"MinIO Error: {e}")
     # print("--- ✅ 다운로드 완료. 모델 로딩 시작... ---")
 
-    tokenizer = PreTrainedTokenizerFast.from_pretrained(save_dir)
-    model = AutoModelForCausalLM.from_pretrained(save_dir)
+    logger.info("--- 자동완성 모델 로딩 중... ---")
+    try:
+        # 🌟 [핵심 수정] Config를 명시적으로 로드하여 딕셔너리 오류 방지
+        config = AutoConfig.from_pretrained(save_dir)
 
-    # GPU or CPU
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Tokenizer 로드
+        tokenizer = PreTrainedTokenizerFast.from_pretrained(save_dir)
 
-    # # quantize model
-    # model = quantize_model(model_32, device)
+        # Model 로드 (config 객체 전달)
+        model = AutoModelForCausalLM.from_pretrained(save_dir, config=config)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model.to(device)
-    model.eval()
-    print(f"--- 모델 로딩 완료 ({device}) ---")
+        model.to(device)
+        model.eval()
+        logger.info(f"--- 자동완성 모델 로드 성공 ({device}) ---")
+
+    except Exception as e:
+        logger.error(f"❌ 자동완성 모델 로드 중 치명적 오류: {e}")
+        raise e
 
     # 어휘집 및 초성 맵 구축
     vocab = tokenizer.get_vocab()

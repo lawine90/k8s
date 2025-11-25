@@ -12,7 +12,6 @@ from typing import List, Tuple
 from fastapi import FastAPI, Query
 from pydantic import BaseModel
 from llama_cpp import Llama
-from transformers import AutoModelForCausalLM, PreTrainedTokenizerFast, AutoTokenizer
 
 
 # --- 로깅 설정 ---
