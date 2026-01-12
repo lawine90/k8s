@@ -94,7 +94,7 @@ if submitted or st.session_state.submitted_query:
 
     # === 왼쪽: 자동완성 (Auto) 서비스 호출 ===
     with col1:
-        st.subheader("1️⃣ 자동완성 후보 (KoGPT)")
+        st.subheader("자동완성 후보 (KoGPT)")
         with st.spinner("자동완성 후보 로딩 중..."):
             try:
                 start_time_auto = time.time()
@@ -115,8 +115,10 @@ if submitted or st.session_state.submitted_query:
 
                     if subkeys:
                         for item in subkeys:
-                            keyword = item.get('subkey', '')
-                            prob = item.get('prob', 0.0)
+                            # keyword = item.get('subkey', '')
+                            # prob = item.get('prob', 0.0)
+                            keyword = item[0]
+                            prob = item[1]
                             st.markdown(f"**{keyword}** <small>({prob:.2%})</small>", unsafe_allow_html=True)
                     else:
                         st.info("자동완성 결과 없음.")
@@ -132,7 +134,7 @@ if submitted or st.session_state.submitted_query:
 
     # === 오른쪽: 연관검색어 (Relkey) 서비스 호출 ===
     with col2:
-        st.subheader("2️⃣ 연관 검색어 생성 (Qwen)")
+        st.subheader("연관 검색어 생성 (Qwen)")
         with st.spinner("연관 키워드 생성 중... (LLM 추론)"):
             try:
                 start_time_rel = time.time()
