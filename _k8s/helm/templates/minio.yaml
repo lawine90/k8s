@@ -1,0 +1,86 @@
+{{- if .Values.minio.enabled}}}
+
+# PVC가 존재하는지 먼저 확인
+{{- $pvc := lookup "v1" "PersistentVolumeClaim" .Release.Namespace .Values.minio.pvcName -}}
+
+# PVC가 존재하지 않을때만 아래 PVC 생성
+{{- if not $pvc }}
+# 1. PVC for model
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.minio.pvcName }}
+  namespace: {{ .Values.namespace }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.minio.storageSize }}
+{{- end }}
+---
+
+# 2. deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      volumes:
+        - name: minio-storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.minio.pvcName }}
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image }}
+          #args: ["server", "/data", "--console-address", ":9001"]
+          args:
+            - server
+            - /data
+            - --address
+            - :{{ .Values.minio.deploy.apiPort }}
+            - --console-address
+            - :{{ .Values.minio.deploy.consolePort }}
+          env:
+            # 실제 운영시 k8s secret으로 관리
+            - name: MINIO_ROOT_USER
+              value: {{ .Values.minio.credentials.user | quote }}
+            - name: MINIO_ROOT_PASSWORD
+              value: {{ .Values.minio.credentials.password | quote }}
+          ports:
+            - containerPort: {{ .Values.minio.deploy.apiPort }}
+            - containerPort: {{ .Values.minio.deploy.consolePort }}
+          volumeMounts:
+            - name: minio-storage
+              mountPath: /data
+---
+
+# 3. service
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-service
+  namespace: {{ .Values.namespace }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.minio.deploy.apiPort }}
+      targetPort: {{ .Values.minio.deploy.apiPort }}
+      name: api
+    - port: {{ .Values.minio.deploy.consolePort }}
+      targetPort: {{ .Values.minio.deploy.consolePort }}
+      name: console
+  selector:
+    app: minio
+
+{{- end}}}

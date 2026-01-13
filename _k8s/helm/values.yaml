@@ -1,0 +1,63 @@
+# 공통 설정
+namespace: autocomplete
+ingress:
+  host: "s-extension-dev.onkakao.net"
+
+# 1. 자동완성 (Autocomplete) 설정
+autocomplete:
+  enabled: true    # minio 먼저 설치하기 위한 스위치. 최초 설치시는 autocomplete와 relkey는 false
+  inference:
+    name: autocomplete-inference
+    replicas: 2
+    image: idock.daumkakao.io/searchquery/s-extension:auto_inference_latest
+    port: 8000  # Dockerfile 포트
+    resources:
+      requests: {
+        cpu: "1000m",
+        memory: "2Gi",
+        #nvidia.com/gpu: "1"
+      }
+      limits: { memory: "5Gi" }
+  api:
+    name: autocomplete-api
+    replicas: 1
+    image: idock.daumkakao.io/searchquery/s-extension:auto_api_latest
+    port: 8000  # Dockerfile 포트
+    resources:
+      requests: { cpu: "500m", memory: "512Mi" }
+      limits: { memory: "1Gi" }
+
+# 2. 연관검색어 (Relkey) 설정
+relkey:
+  enabled: true    # minio 먼저 설치하기 위한 스위치. 최초 설치시는 autocomplete와 relkey는 false
+  inference:
+    name: relkey-inference
+    replicas: 2
+    image: idock.daumkakao.io/searchquery/s-extension:relkey_inference_latest
+    port: 8000
+    resources:
+      requests: { cpu: "2000m", memory: "5Gi" }
+      limits: { memory: "7Gi" }
+  api:
+    name: relkey-api
+    replicas: 1
+    image: idock.daumkakao.io/searchquery/s-extension:relkey_api_latest
+    port: 8000 # Dockerfile 포트
+    resources:
+      requests: { cpu: "500m", memory: "512Mi" }
+      limits: { memory: "1Gi" }
+
+# 3. MinIO 설정
+minio:
+  enabled: true
+  image: minio/minio:latest
+  pvcName: minio-pvc-v2
+  storageSize: 15Gi
+  credentials:
+    user: minioadmin
+    password: minioadmin
+  deploy:
+    apiPort: 9000
+    consolePort: 9001
+  ingress:
+    host: "minio-dev.onkakao.net"

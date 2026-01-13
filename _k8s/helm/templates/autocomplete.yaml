@@ -1,0 +1,93 @@
+{{- if .Values.autocomplete.enabled}}}
+
+### Inference Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.autocomplete.inference.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.autocomplete.inference.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.autocomplete.inference.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.autocomplete.inference.name }}
+    spec:
+      containers:
+        - name: inference-container
+          image: {{ .Values.autocomplete.inference.image }}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: {{ .Values.autocomplete.inference.port }}
+
+          # 모델 로딩이 정상 동작했는지 확인 (성공 전까지 트래픽 차단)
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.autocomplete.inference.port }}
+            initialDelaySeconds: 30   # 컨테이너 시작 후 30초 뒤부터 체크
+            periodSeconds: 10         # 10초 간격으로 체크
+            failureThreshold: 30      # 30번 실패시 모델 로딩 실패로 간주
+          resources:
+{{ toYaml .Values.autocomplete.inference.resources | indent 12 }}
+---
+### Inference Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.autocomplete.inference.name }}-svc
+  namespace: {{ .Values.namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.autocomplete.inference.name }}
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: {{ .Values.autocomplete.inference.port }}
+---
+### API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.autocomplete.api.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.autocomplete.api.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.autocomplete.api.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.autocomplete.api.name }}
+    spec:
+      containers:
+        - name: api-container
+          image: {{ .Values.autocomplete.api.image }}
+          env:
+            - name: INFERENCE_URL
+              value: "http://{{ .Values.autocomplete.inference.name }}-svc.{{ .Values.namespace }}.svc.cluster.local/generate"
+          ports:
+            - containerPort: {{ .Values.autocomplete.api.port }}
+          resources:
+{{ toYaml .Values.autocomplete.api.resources | indent 12 }}
+---
+### API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.autocomplete.api.name }}
+  namespace: {{ .Values.namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .Values.autocomplete.api.name }}
+  ports:
+    - port: 80
+      targetPort: {{ .Values.autocomplete.api.port }}
+
+{{- end}}}
